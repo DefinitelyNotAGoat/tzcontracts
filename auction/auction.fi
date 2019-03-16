@@ -1,0 +1,158 @@
+struct Claim(
+    bool resolved,
+    string buyer,
+    string seller
+);
+
+struct Asset(
+  string name,
+  string desc,
+  mutez bid,
+  address manager,
+  address winner,
+  Claim claim,
+  timestamp end,
+  timestamp resPeriod
+);
+
+storage map[int=>Asset] auction;
+storage int total;
+
+entry addAsset(Asset asset){
+    if (input.asset.end < NOW || input.asset.end > input.asset.resPeriod ) {
+        throw(string "Invalid end or resolution dates.");
+    } 
+    let nat len = length(storage.auction);
+    if (len == nat 0) {
+        storage.auction.push(int 0, input.asset);
+        storage.total = int 1;
+    } else {
+        storage.auction.push(storage.total, input.asset);
+        storage.total.add(int 1);
+    }
+}
+
+entry addClaimBuyer(int id, string claim){
+    if (in(storage.auction, input.id) == bool false) {
+       throw(string "No item exists by that Id for this auction.");
+    }
+    let Asset asset = storage.auction.get(input.id);
+    if (SENDER != asset.winner) {
+        throw(string "You are not authorized to add to claim.");
+    }
+    if (asset.end > NOW) {
+        throw(string "You can't make a claim on an auction still live.");
+    }
+    if (asset.resPeriod > NOW) {
+        asset.claim.resolved = bool false;
+        asset.claim.buyer = input.claim;
+        storage.auction.push(input.id, asset);
+    }
+}
+
+entry addClaimSeller(int id, string claim){
+    if (in(storage.auction, input.id) == bool false) {
+       throw(string "No item exists by that Id for this auction.");
+    }
+    let Asset asset = storage.auction.get(input.id);
+    if (SENDER != asset.manager) {
+        throw(string "You are not authorized to add to claim.");
+    }
+    if (asset.end > NOW) {
+        throw(string "You can't make a claim on an auction still live.");
+    }
+    asset.claim.seller = input.claim;
+    storage.auction.push(input.id, asset);
+}
+
+entry resolveClaim(int id){
+     if (in(storage.auction, input.id) == bool false) {
+       throw(string "No item exists by that Id for this auction.");
+    }
+    let Asset asset = storage.auction.get(input.id);
+    if (SENDER != asset.winner) {
+        throw(string "You are not authorized to resolve this claim.");
+    }
+    if (asset.end > NOW) {
+        throw(string "You can't resolve a claim on an auction still live.");
+    }
+    if (asset.claim.resolved == bool true) {
+         throw(string "There is nothing to resolve.");
+    }
+    asset.claim.resolved = bool true;
+    storage.auction.push(input.id, asset);
+}
+
+entry withdraw(int id){
+    if (in(storage.auction, input.id) == bool false) {
+       throw(string "No item exists by that Id for this auction.");
+    }
+    let Asset asset = storage.auction.get(input.id);
+    if (SENDER != asset.manager) {
+        throw(string "You are not authorized to withdraw from this auction.");
+    }
+    if (asset.claim.resolved == bool false) {
+        throw(string "You must resolve the claim with the buyer to receive funds.")
+    }
+
+    if (asset.end > NOW || NOW < asset.resPeriod) {
+         throw(string "The auction has not ended or the resolution period has not past.")
+    }
+    if (asset.bid != mutez 0) {
+        transfer(SENDER, asset.bid);
+    } else {
+        throw(string "You cannot withdraw 0.")
+    }
+}
+
+entry refund(int id){
+     if (in(storage.auction, input.id) == bool false) {
+       throw(string "No item exists by that Id for this auction.");
+    }
+    let Asset asset = storage.auction.get(input.id);
+    if (SENDER != asset.manager) {
+        throw(string "You are not authorized to send a refund for this auction.");
+    }
+    
+    if (asset.end > NOW) {
+         throw(string "The auction has not ended.");
+    }
+
+    if (asset.bid != mutez 0) {
+        transfer(asset.winner, asset.bid);
+    } else {
+        throw(string "You cannot refund 0.")
+    }
+    asset.claim.resolved = bool true;
+    storage.auction.push(input.id, asset);
+}
+
+entry bid(int id){
+    if (in(storage.auction, input.id) == bool false) {
+       throw(string "No item exists by that Id for this auction.");
+    }
+    let Asset asset = storage.auction.get(input.id);
+    let address oldWinner = asset.winner;
+
+    if (SENDER == asset.manager) {
+        throw(string "You cant bid against your own item.");
+    }
+
+    if (asset.end < NOW) {
+        throw(string "The auction for the item requested has already ended.");
+    } 
+    if (AMOUNT == mutez 0) {
+        throw(string "You cannot bid 0.");
+    }
+    if (asset.bid >= AMOUNT){
+        transfer(SENDER, AMOUNT);
+        throw(string "Sending funds back - bid too low.");
+    } else {
+        if (asset.bid != mutez 0) {
+            transfer(oldWinner, AMOUNT);
+        }   
+        asset.winner = SENDER;
+        asset.bid = AMOUNT;
+        storage.auction.push(input.id, asset)
+    }
+}
